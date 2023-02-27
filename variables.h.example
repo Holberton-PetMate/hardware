@@ -1,0 +1,5 @@
+#ifndef VARIABLES_H
+#define VARIABLES_H
+String backend_host = "";
+String get_time_zone_url = "";//https://api.ipgeolocation.io/timezone?apiKey=
+#endif
