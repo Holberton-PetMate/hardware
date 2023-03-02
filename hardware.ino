@@ -15,7 +15,7 @@ String password_wifi;
 String code_id;
 int feeder_id = 0;
 int connected = 0;
-int wifi_desconnected_counter = 599;
+int wifi_desconnected_counter = 19;
 int get_feeding_time_counter = 0;
 int food_counter = 50;
 JsonArray feeding_times;
@@ -76,6 +76,7 @@ String methodHTTP(String host, String url, String body = "") {
   String result = {};
 
   http.begin(host + url + body);
+  Serial.println(url);
   http.addHeader("Content-Type", "text/plain");
 
   if (http.GET() > 0) {
@@ -89,6 +90,7 @@ String methodHTTP(String host, String url, String body = "") {
 DynamicJsonDocument getRequestMethod(String host, String url, String body = "", int https = 0) {
   DynamicJsonDocument response(1024);
   String result = https ? methodHTTPS(host, url) : methodHTTP(host, url, body);
+  Serial.println(result);
   DeserializationError error = deserializeJson(response, result);
   if (error) {
     Serial.print("Error al analizar la cadena de caracteres JSON: ");
@@ -97,14 +99,16 @@ DynamicJsonDocument getRequestMethod(String host, String url, String body = "", 
   return response;
 }
 void getId() {
-  feeder_id = 17;  //getRequestMethod(backend_host, "/backend/pet-mate-app/public/api/feeders/check_redeemed?code_id=" + code_id)["id"];
+  feeder_id  = 17;  //getRequestMethod(backend_host, "/backend/pet-mate-app/public/api/feeders/check_redeemed?code_id=" + code_id)["id"];
 }
 void getFeedingTime() {
   feeding_times = getRequestMethod(backend_host, "/backend/pet-mate-app/public/api/feeders/" + String(feeder_id) + "/feeding_times").as<JsonArray>();
+  Serial.println("Alimentacion");
 }
 void setTimeNow() {
   JsonObject date = getRequestMethod("api.ipgeolocation.io", get_time_zone_url, "", 1).as<JsonObject>();
   String time = date["time_24"];
+  Serial.println(time);
   setTime(time.substring(0, 2).toInt(), time.substring(3, 5).toInt(), 0, date["date"].as<String>().substring(8, 10).toInt(), date["month"].as<int>(), date["year"].as<int>());
 }
 
@@ -186,27 +190,32 @@ void wifiConfiguration() {
 void analyzeFeedingTimes() {
   for (JsonObject feeding_time : feeding_times) {
     if (hour() == feeding_time["hour"] && minute() == feeding_time["minute"]) {
+      Serial.println("Alimentar");
       weight = balance.get_units(10);
       int open = 0;
       int old_weight = balance.get_units(10) - 10;
       int unlock_fail = 0;
-      while ((weight + 10) < feeding_time["weight"]) {
+      Serial.println(weight);
+      Serial.println(feeding_time["weight"].as<int>());
+      int weight_f = feeding_time["weight"];
+      Serial.println(weight_f);
+      weight_f = weight_f == 0 ? weight + 50 : weight_f;
+      while ((weight + 10) < weight_f) {
         if (open == 0) {
-          openDoor(500);
+          Serial.println("Abrir");
+          openDoor(2000);
           open = 1;
         }
         if (old_weight == weight) {
-          if (unlock_fail > 3)
-          {
+          if (unlock_fail > 3) {
             return;
           }
           unlockDoor();
           unlock_fail++;
-        }
-        else {
+        } else {
           unlock_fail = 0;
         }
-        
+
         old_weight = balance.get_units(10);
         Serial.println("old");
         Serial.println(old_weight);
@@ -218,7 +227,7 @@ void analyzeFeedingTimes() {
         Serial.println(weight);
       }
       if (open) {
-        closeDoor(1000);
+        closeDoor(2000);
       }
     }
   }
@@ -259,7 +268,7 @@ void setup() {
   pinMode(pinUltEcho, INPUT);
 
   // Sensor de obs
-  pinMode(pinObs, INPUT);
+  
 
   code_id = String(ESP.getEfuseMac(), HEX).substring(0, 6);
   EEPROM.begin(254);
@@ -285,6 +294,7 @@ void setup() {
   server.begin();
   Serial.println("Servidor HTTP iniciado");
   Serial.println(code_id);
+  pinMode(pinObs, INPUT);
 }
 
 int getDepositPercentage() {
@@ -322,34 +332,63 @@ void sendCurrentFood() {
   http.end();
 }
 
-void petEating()
-{
+void sendFeedingRecord(int weight) {
+  char buffer[20];
+  sprintf(buffer, "%04d-%02d-%02d %02d:%02d:%02d", year(), month(), day(), hour(), minute(), second());
+
+  String jsonBody = "{\"feeder_id\":" + String(feeder_id) + ",\"weight\":" + String(weight) + ",\"date\":\"" + buffer + "\",\"mode\":\"output\"}";
+
+  // Configurar solicitud POST
+  http.begin(backend_host + "/backend/pet-mate-app/public/api/feeding_records");
+  http.addHeader("Content-Type", "application/json");
+
+  // Enviar solicitud POST con cuerpo JSON
+  int httpResponseCode = http.POST(jsonBody);
+
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println(httpResponseCode);
+    Serial.println(response);
+  } else {
+    Serial.println("Error in the PUT request");
+  }
+
+  http.end();
+}
+void petEating() {
   int count = 0;
   int free_space_count = 0;
   int old_weight = weight;
-  while(free_space_count < 300)
-  {
-    if (analogRead(pinObs) < 500)
-    {
+  Serial.println("Comiendo");
+  while (free_space_count < 300) {
+    int sensorValue = analogRead(pinObs);
+    if (sensorValue < 500) {
+      free_space_count = 0;
+      Serial.println("Adentro");
+      Serial.println(sensorValue);
 
-    }
-    else {
-      
+    } else {
+      free_space_count++;
+      Serial.println("Fuera");
     }
     delay(100);
   }
+  weight = balance.get_units(10);
+  int weight_consumed = old_weight - weight;
+  Serial.println("Send data - eat");
+  Serial.println(weight_consumed);
 }
 
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     if (!connected) {
       getId();
-      get_feeding_time_counter = 59;
+      get_feeding_time_counter = 29;
       setTimeNow();
       connected = 1;
     }
 
-    if (get_feeding_time_counter == 60) {
+    if (get_feeding_time_counter == 30) {
       getFeedingTime();
       analyzeFeedingTimes();
       get_feeding_time_counter = 0;
@@ -361,11 +400,11 @@ void loop() {
     food_counter++;
     wifi_desconnected_counter = 0;
     get_feeding_time_counter++;
-    if (analogRead(pinObs) < 500 && weight != balance.get_units(10))
-    {
+   /* int sensorValue = analogRead(pinObs);
+    if (sensorValue < 500 && weight != balance.get_units(10)) {
       Serial.println("The pet is eating...");
       petEating();
-    }
+    }*/
 
   } else if (WiFi.status() != WL_CONNECTED) {
     if (connected) {
@@ -374,14 +413,14 @@ void loop() {
     wifi_desconnected_counter++;
   }
   delay(1000);
-  /*if (wifi_desconnected_counter == 600) {
+  if (wifi_desconnected_counter == 20) {
     wifi_desconnected_counter = 0;
-    EEPROM.get(0, ssid_wifi);
-    EEPROM.get(128, password_wifi);
+    ssid_wifi = "Mi 10T Pro";
+    password_wifi = "123456789";
     Serial.println("Conectando...");
     Serial.println(ssid_wifi);
     Serial.println(password_wifi);
     WiFi.begin(ssid_wifi.c_str(), password_wifi.c_str());
-  }*/
+  }
   server.handleClient();
 }
